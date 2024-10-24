@@ -14,8 +14,10 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::config;
 use crate::loader::{get_app_data, get_num_app};
 use crate::sync::UPSafeCell;
+use crate::timer::get_time_us;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
@@ -79,6 +81,12 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+
+        // time start
+        if next_task.program_start_time == 0 {
+            next_task.program_start_time = get_time_us();
+        }
+
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -141,6 +149,12 @@ impl TaskManager {
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
             inner.current_task = next;
+
+            // time start
+            if inner.tasks[next].program_start_time == 0 {
+                inner.tasks[next].program_start_time = get_time_us();
+            }
+
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
             drop(inner);
@@ -153,6 +167,26 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Get the syscall stats of current 'Running' task
+    fn current_syscall_stats(&self) -> [u32; config::MAX_SYSCALL_NUM] {
+        let inner = self.inner.exclusive_access();
+        inner.tasks[inner.current_task].program_syscall_times
+    }
+
+    /// Update the syscall stats of current 'Running' task
+    fn current_syscall_update(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].update_syscall_stats(syscall_id);
+    }
+
+    /// Get the total time of current 'Running' task
+    fn current_time_total(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        get_time_us() - inner.tasks[inner.current_task].program_start_time
+    }
+
 }
 
 /// Run the first task in task list.
@@ -201,4 +235,20 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+
+/// Get the current 'Running' task's syscall stats.
+pub fn current_syscall_stats() -> [u32; config::MAX_SYSCALL_NUM] {
+    TASK_MANAGER.current_syscall_stats()
+}
+
+/// Update the syscall stats of current 'Running' task
+pub fn current_syscall_update(syscall_id: usize) {
+    TASK_MANAGER.current_syscall_update(syscall_id);
+}
+
+/// Get the total time of current 'Running' task
+pub fn current_time_total() -> usize {
+    TASK_MANAGER.current_time_total()
 }
